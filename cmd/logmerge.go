@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -11,8 +12,9 @@ import (
 )
 
 var (
-	in  []string
-	out string
+	in           []string
+	out          string
+	earliestDate time.Time = time.Now()
 )
 
 func mergeCommand() *cobra.Command {
@@ -76,70 +78,75 @@ func mergeLogs(files []string, output string) error {
 		openFiles[i] = text
 	}
 
-	iteration := 0
-	for {
-		filesWithLogs := 0
-		earliestIndex := 999
-		earliestDate := time.Now()
+	// Recurse through all the files until we are told to stop.
+	logLoop(datawriter, openFiles)
 
-		// Loop over files
-		for i := 0; i < len(openFiles); i++ {
-			if len(openFiles[i]) > 0 && openFiles[i][0] == "" {
-				openFiles = append(openFiles[:i], openFiles[i+1:]...)
-			} else {
-				if len(openFiles[i]) > 0 {
-					filesWithLogs++
-					line := openFiles[i][0]
-					if strings.Contains(line, "time=") {
-						cols := strings.Split(line, " ")
-						for j, col := range cols {
-							if strings.Contains(col, "time=") {
-								// Take the 2nd index because the first one will be empty.
-								timestamp := strings.Split(col, "time=")[1]
-								if !strings.Contains(timestamp, ":") {
-									if strings.Contains(cols[j+1], ":") {
-										timestamp = timestamp + "T" + cols[j+1]
-									}
-								}
-								// Trim the quotes from the string.
-								timestamp = strings.Trim(timestamp, "\"")
-								// Parse the date into our date layout.
-								t, err := time.Parse(time.RFC3339, timestamp)
-								if err != nil {
-									logrus.Infof("Line: %s", line)
-									logrus.Fatalf("failed to parse date %s into a valid date: %v", timestamp, err)
-								}
-								// Is the parsed date after the earliest date we found?
-								if earliestDate.After(t) {
-									earliestDate = t
-									earliestIndex = i
-								}
-							}
-						}
-					} else {
-						openFiles[i] = append(openFiles[i][:0], openFiles[i][1:]...)
+	return nil
+}
+
+func logLoop(dataWriter *bufio.Writer, openFiles [][]string) {
+	keepGoing := false
+	earliestIndex := 999
+	earliestDate = time.Now()
+
+	// Loop over files
+	for i := 0; i < len(openFiles); i++ {
+		if len(openFiles[i]) > 0 && openFiles[i][0] == "" {
+			openFiles = append(openFiles[:i], openFiles[i+1:]...)
+		} else {
+			if len(openFiles[i]) > 0 {
+				keepGoing = true
+				line := openFiles[i][0]
+
+				regex := regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}Z*,*[0-9]*`)
+				matches := regex.FindAllString(line, -1)
+				if len(matches) != 0 {
+
+					timestamp := strings.Replace(matches[0], " ", "T", 1)
+
+					// Change `2021-10-04 23:48:20,261` format into the expected `2021-10-04T23:48:03Z` format for parsing
+					if strings.Contains(timestamp, ",") {
+						splits := strings.Split(timestamp, ",")
+						timestamp = splits[0]
 					}
+
+					// Add trailing Z if we do not have one to match the required format.
+					if !strings.Contains(timestamp, "Z") {
+						timestamp = timestamp + "Z"
+					}
+
+					// Parse the date into our date layout.
+					t, err := time.Parse(time.RFC3339, timestamp)
+
+					if err != nil {
+						logrus.Infof("Line: %s", line)
+						logrus.Fatalf("failed to parse date %s into a valid date: %v", timestamp, err)
+					}
+
+					// Is the parsed date after the earliest date we found?
+					if t.Before(earliestDate) {
+						earliestDate = t
+						earliestIndex = i
+					}
+				} else {
+					openFiles[i] = append(openFiles[i][:0], openFiles[i][1:]...)
 				}
 			}
 		}
-
-		iteration++
-		if filesWithLogs == 0 {
-			break
-		}
-
-		if earliestIndex != 999 {
-			// Write line
-			_, err = datawriter.WriteString(openFiles[earliestIndex][0] + "\n")
-			if err != nil {
-				logrus.Fatalf("failed to write line from file %v with err: %v", files[earliestIndex], err)
-			}
-
-			// Pop line from the array.
-			openFiles[earliestIndex] = openFiles[earliestIndex][1:]
-
-			datawriter.Flush()
-		}
 	}
-	return nil
+
+	if earliestIndex != 999 {
+		_, err := dataWriter.WriteString(openFiles[earliestIndex][0] + "\n")
+		if err != nil {
+			logrus.Fatalf("failed to write line to file: %v", err)
+		}
+
+		// Pop line from the array.
+		openFiles[earliestIndex] = openFiles[earliestIndex][1:]
+		dataWriter.Flush()
+	}
+
+	if keepGoing {
+		logLoop(dataWriter, openFiles)
+	}
 }
