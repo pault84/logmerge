@@ -15,6 +15,7 @@ var (
 	in           []string
 	out          string
 	earliestDate time.Time = time.Now()
+	pattern                = regexp.MustCompile(`\d{4}[-\/]\d{2}[-\/]\d{2}[T_ ]*[ ]?\d{1,}:\d{1,}:\d{1,}Z*,*[0-9]*`)
 )
 
 func mergeCommand() *cobra.Command {
@@ -78,6 +79,16 @@ func mergeLogs(files []string, output string) error {
 		openFiles[i] = text
 	}
 
+	// Loop over files and purge files that do not match our regex.
+	for i := 0; i < len(openFiles); i++ {
+		for j, line := range openFiles[i] {
+			matches := pattern.FindAllString(line, -1)
+			if len(matches) == 0 {
+				openFiles[i] = append(openFiles[i][:j], openFiles[i][j+1:]...)
+			}
+		}
+	}
+
 	// Recurse through all the files until we are told to stop.
 	logLoop(datawriter, openFiles)
 
@@ -91,46 +102,53 @@ func logLoop(dataWriter *bufio.Writer, openFiles [][]string) {
 
 	// Loop over files
 	for i := 0; i < len(openFiles); i++ {
-		if len(openFiles[i]) > 0 && openFiles[i][0] == "" {
+		if len(openFiles[i]) == 0 {
 			openFiles = append(openFiles[:i], openFiles[i+1:]...)
 		} else {
-			if len(openFiles[i]) > 0 {
-				keepGoing = true
-				line := openFiles[i][0]
 
-				regex := regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}Z*,*[0-9]*`)
-				matches := regex.FindAllString(line, -1)
-				if len(matches) != 0 {
+			keepGoing = true
+			line := openFiles[i][0]
 
-					timestamp := strings.Replace(matches[0], " ", "T", 1)
+			matches := pattern.FindAllString(line, -1)
+			if len(matches) != 0 {
 
-					// Change `2021-10-04 23:48:20,261` format into the expected `2021-10-04T23:48:03Z` format for parsing
-					if strings.Contains(timestamp, ",") {
-						splits := strings.Split(timestamp, ",")
-						timestamp = splits[0]
+				timestamp := strings.Replace(matches[0], " ", "T", 1)
+				timestamp = strings.ReplaceAll(timestamp, "/", "-")
+
+				if strings.Contains(timestamp, "_") {
+					if !strings.Contains(timestamp, "T") {
+						timestamp = strings.Replace(timestamp, "_", "T", 1)
+					} else {
+						timestamp = strings.Replace(timestamp, "_", "", 1)
 					}
-
-					// Add trailing Z if we do not have one to match the required format.
-					if !strings.Contains(timestamp, "Z") {
-						timestamp = timestamp + "Z"
-					}
-
-					// Parse the date into our date layout.
-					t, err := time.Parse(time.RFC3339, timestamp)
-
-					if err != nil {
-						logrus.Infof("Line: %s", line)
-						logrus.Fatalf("failed to parse date %s into a valid date: %v", timestamp, err)
-					}
-
-					// Is the parsed date after the earliest date we found?
-					if t.Before(earliestDate) {
-						earliestDate = t
-						earliestIndex = i
-					}
-				} else {
-					openFiles[i] = append(openFiles[i][:0], openFiles[i][1:]...)
 				}
+
+				// Change `2021-10-04 23:48:20,261` format into the expected `2021-10-04T23:48:03Z` format for parsing
+				if strings.Contains(timestamp, ",") {
+					splits := strings.Split(timestamp, ",")
+					timestamp = splits[0]
+				}
+
+				// Add trailing Z if we do not have one to match the required format.
+				if !strings.Contains(timestamp, "Z") {
+					timestamp = timestamp + "Z"
+				}
+
+				// Parse the date into our date layout.
+				t, err := time.Parse(time.RFC3339, timestamp)
+
+				if err != nil {
+					logrus.Infof("Line: %s", line)
+					logrus.Fatalf("failed to parse date %s into a valid date: %v", timestamp, err)
+				}
+
+				// Is the parsed date after the earliest date we found?
+				if t.Before(earliestDate) {
+					earliestDate = t
+					earliestIndex = i
+				}
+			} else {
+				openFiles[i] = append(openFiles[i][:0], openFiles[i][1:]...)
 			}
 		}
 	}
@@ -140,7 +158,6 @@ func logLoop(dataWriter *bufio.Writer, openFiles [][]string) {
 		if err != nil {
 			logrus.Fatalf("failed to write line to file: %v", err)
 		}
-
 		// Pop line from the array.
 		openFiles[earliestIndex] = openFiles[earliestIndex][1:]
 		dataWriter.Flush()
