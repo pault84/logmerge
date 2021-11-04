@@ -2,13 +2,13 @@ package cmd
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
-	"github.com/spf13/cobra"
 )
 
 var (
@@ -18,34 +18,10 @@ var (
 	pattern                = regexp.MustCompile(`\d{4}[-\/]\d{2}[-\/]\d{2}[T_ ]*[ ]?\d{1,}:\d{1,}:\d{1,}Z*,*[0-9]*`)
 )
 
-func mergeCommand() *cobra.Command {
-	var mergeCmd = &cobra.Command{
-		Use:   "merge",
-		Short: "Merge the provided files",
-		Long:  `Merge provided files based on timestamp and output new logfile.`,
-		Run: func(cmd *cobra.Command, args []string) {
-			mergeLogs(in, out)
-		},
-	}
-
-	mergeCmd.Flags().StringSliceVarP(&in, "files", "f", []string{}, "comma-seperated logfiles that you wish to merge.")
-	mergeCmd.Flags().StringVarP(&out, "output", "o", "merge.log", "outputlogfile.")
-
-	return mergeCmd
-}
-
-func mergeLogs(files []string, output string) error {
-	logrus.Infof("In: %v", in)
-	logrus.Infof("Out: %v", out)
+func mergeLogs(files []string) error {
+	logrus.Infof("In: %v", files)
 
 	openFiles := make([][]string, 3)
-	mergedlog, err := os.OpenFile(output, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		logrus.Fatalf("failed creating file: %s", err)
-	}
-
-	datawriter := bufio.NewWriter(mergedlog)
-	defer mergedlog.Close()
 
 	for i := 0; i < len(files); i++ {
 		f, err := os.Open(files[i])
@@ -90,12 +66,12 @@ func mergeLogs(files []string, output string) error {
 	}
 
 	// Recurse through all the files until we are told to stop.
-	logLoop(datawriter, openFiles)
+	logLoop(openFiles)
 
 	return nil
 }
 
-func logLoop(dataWriter *bufio.Writer, openFiles [][]string) {
+func logLoop(openFiles [][]string) {
 	keepGoing := false
 	earliestIndex := 999
 	earliestDate = time.Now()
@@ -154,16 +130,12 @@ func logLoop(dataWriter *bufio.Writer, openFiles [][]string) {
 	}
 
 	if earliestIndex != 999 {
-		_, err := dataWriter.WriteString(openFiles[earliestIndex][0] + "\n")
-		if err != nil {
-			logrus.Fatalf("failed to write line to file: %v", err)
-		}
+		fmt.Println(openFiles[earliestIndex][0])
 		// Pop line from the array.
 		openFiles[earliestIndex] = openFiles[earliestIndex][1:]
-		dataWriter.Flush()
 	}
 
 	if keepGoing {
-		logLoop(dataWriter, openFiles)
+		logLoop(openFiles)
 	}
 }
