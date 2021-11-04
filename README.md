@@ -11,7 +11,7 @@ you can find this in `cmd/logmerge.go`
 ## Example:
 `bin/logmerge log1 log2 log3 > output.log`
 
-##Output
+## Output
 ```
 INFO[0000] In: [origLogs/colo2.log origLogs/colo3.log origLogs/colo4.log]
 ```
